@@ -1,52 +1,68 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Pesis PRO-Analysaattori", layout="wide")
+st.set_page_config(page_title="Pesis PRO: Tilastoanalyysi", layout="wide")
 
-st.title("⚾ Pesis-Analysaattori (Excel & CSV Import)")
+st.title("⚾ Pesis-Analysaattori PRO")
+st.markdown("---")
 
-st.info("Lataa Power Queryllä haettu tiedosto (testi_1.xlsx tai events_.csv) tähän alapuolelle.")
-
-uploaded_file = st.file_uploader("Valitse tiedosto", type=['csv', 'xlsx'])
+uploaded_file = st.file_uploader("Lataa laajennettu Excel tai CSV", type=['csv', 'xlsx'])
 
 if uploaded_file:
     try:
-        # Automaattinen tunnistus tiedostopäätteen mukaan
+        # Lukeminen
         if uploaded_file.name.endswith('.xlsx'):
             df = pd.read_excel(uploaded_file)
         else:
-            df = pd.read_csv(uploaded_file, sep=None, engine='python')
-        
-        st.success(f"Tiedosto luettu onnistuneesti! Tapahtumia: {len(df)}")
-
-        # --- ANALYYSI OSA ---
-        st.header("📊 Ottelun torjuntatilastot")
-        
-        # Tarkistetaan löytyykö tarvittavat sarakkeet
-        needed_cols = ['pesat_teksti', 'tulos_teksti']
-        if all(col in df.columns for col in needed_cols):
+            df = pd.read_csv(uploaded_file)
             
-            # Lasketaan yritykset ja palot (torjunnat)
-            summary = df.groupby('pesat_teksti').agg(
+        st.success(f"Data ladattu! Rivimäärä laajennuksen jälkeen: {len(df)}")
+
+        # --- 1. TORJUNTAPROSENTIT PESÄVÄLEITTÄIN ---
+        st.header("🛡️ Ulkopelin torjuntatehokkuus")
+        
+        if 'pesat_teksti' in df.columns and 'tulos_teksti' in df.columns:
+            # Siivotaan data: poistetaan tyhjät ja "Vapaa" -tyyppiset, jotka eivät ole varsinaisia suorituksia
+            df_clean = df[df['pesat_teksti'].notna()].copy()
+            
+            # Ryhmittely
+            summary = df_clean.groupby('pesat_teksti').agg(
                 Yritykset=('tulos_teksti', 'count'),
-                Torjunnat=('tulos_teksti', lambda x: (x.astype(str).str.contains('Palo', case=False, na=False)).sum())
+                Palot=('tulos_teksti', lambda x: x.astype(str).str.contains('Palo', case=False).sum()),
+                Juoksut=('tulos_teksti', lambda x: x.astype(str).str.contains('Juoksu', case=False).sum())
             ).reset_index()
             
-            summary['Torjunta%'] = (summary['Torjunnat'] / summary['Yritykset'] * 100).round(1)
+            # Lasketaan Torjunta% (Palot / Yritykset)
+            summary['Torjunta%'] = (summary['Palot'] / summary['Yritykset'] * 100).round(1)
             
-            # Järjestetään pesävälit loogisesti
-            vali_jarjestys = {"0-1": 1, "1-2": 2, "2-3": 3, "3-Koti": 4}
-            summary['order'] = summary['pesat_teksti'].map(vali_jarjestys)
-            summary = summary.sort_values('order').drop('order', axis=1).fillna(0)
+            # Järjestys
+            jarjestys = {"0-1": 1, "1-2": 2, "2-3": 3, "3-Koti": 4}
+            summary['sort'] = summary['pesat_teksti'].map(jarjestys)
+            summary = summary.sort_values('sort').drop('sort', axis=1).fillna(0)
             
             st.table(summary)
             
-        else:
-            st.warning("Tiedostosta puuttuu sarakkeita. Varmista, että laajensit Power Queryssä kaikki kentät (lyoja_nimi, tulos_teksti jne.)")
+        # --- 2. LYÖNTISUUNTA JA TULOS ---
+        st.header("🎯 Lyöntianalyysi")
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            if 'lyonni_suunta' in df.columns:
+                st.subheader("Suosituimmat lyöntisuunnat")
+                st.bar_chart(df['lyonni_suunta'].value_counts())
+        
+        with col2:
+            if 'lyonni_laji' in df.columns:
+                st.subheader("Lyöntityypit")
+                st.write(df['lyonni_laji'].value_counts())
 
-        # --- LISÄTIEDOT ---
-        with st.expander("Näytä raakadata"):
-            st.dataframe(df)
+        # --- 3. PELAAJAKOHTAINEN ETSIN ---
+        st.header("🔍 Pelaajakohtainen tarkastelu")
+        pelaaja = st.selectbox("Valitse lyöjä:", options=df['lyoja_nimi'].unique())
+        pelaaja_df = df[df['lyoja_nimi'] == pelaaja]
+        st.dataframe(pelaaja_df[['lyoja_numero', 'pesat_teksti', 'lyonni_suunta', 'tulos_teksti']])
 
     except Exception as e:
-        st.error(f"Virhe tiedoston luvussa: {e}")
+        st.error(f"Virhe analyysissa: {e}")
+else:
+    st.info("Pudota yläpuolelle se Excel-tiedosto, jonka sait Power Querysta ulos.")
