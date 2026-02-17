@@ -1,71 +1,73 @@
 import streamlit as st
 import pandas as pd
-import requests
 
-st.set_page_config(page_title="Pesis-Analysaattori PRO", layout="wide")
+st.set_page_config(page_title="Pesis Data-Hub PRO", layout="wide")
 
-st.title("⚾ Pesis-Analysaattori")
+st.title("⚾ Pesis Data-Hub: Vedonlyönti-Export")
 
-with st.sidebar:
-    st.header("Hae Ottelu")
-    # Kokeillaan ID:tä 128858
-    ottelu_id = st.text_input("Ottelu-ID", "128858")
-    hae = st.button("HAE JA ANALYSOI", type="primary", use_container_width=True)
+# --- TIEDOSTON LATAUS ---
+st.subheader("📁 Lataa Excel tai CSV")
+uploaded_file = st.file_uploader("Raahaa tähän UP-tilasto tai Syöttölomake", type=['csv', 'xlsx'])
 
-if hae:
-    # UUSI OSOITE: Pesistulokset.fi uusi rajapinta käyttää tätä muotoa
-    # Huom: Jos peli on vuodelta 2024 tai 2025, polku voi vaihdella
-    api_url = f"https://v2.pesistulokset.fi/api/ottelu/{ottelu_id}"
+if uploaded_file:
+    # Luetaan data
+    if uploaded_file.name.endswith('.csv'):
+        df = pd.read_csv(uploaded_file)
+    else:
+        df = pd.read_excel(uploaded_file)
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Accept": "application/json"
-    }
+    st.success(f"Ladattu: {uploaded_file.name}")
     
-    try:
-        r = requests.get(api_url, headers=headers, timeout=10)
+    # --- AUTOMAATTINEN MAPPING ---
+    # Etsitään sarakkeet jotka vastaavat yhtiön tarpeita
+    # (Perustuen antamiisi tiedostoihin)
+    
+    if 'Tilanne' in df.columns and 'Onnistuminen' in df.columns:
+        st.header("📊 Vedonlyöntiyhtiön Plug & Play -raportti")
         
-        if r.status_code == 200:
-            data = r.json()
-            
-            # Perustiedot
-            koti = data.get('koti_joukkue', {}).get('nimi', 'Koti')
-            vieras = data.get('vieras_joukkue', {}).get('nimi', 'Vieras')
-            st.success(f"Ottelu löytyi: {koti} - {vieras}")
-            
-            # Tapahtumat
-            tapahtumat = data.get('tapahtumat', [])
-            if tapahtumat:
-                df = pd.DataFrame(tapahtumat)
-                
-                # --- VEDONLYÖNTIANALYYSI ---
-                st.subheader("🛡️ Ulkopelin analyysi (Plug & Play)")
-                
-                # Lasketaan torjunnat ja yritykset
-                # Suodatetaan pois tyhjät tai epäolennaiset rivit
-                if 'tapahtuma_teksti' in df.columns:
-                    col1, col2, col3 = st.columns(3)
-                    
-                    palot = len(df[df['tapahtuma_teksti'] == 'Palo'])
-                    juoksut = len(df[df['tapahtuma_teksti'] == 'Juoksu'])
-                    
-                    col1.metric("Torjunnat (Palot)", palot)
-                    col2.metric("Päästetyt juoksut", juoksut)
-                    col3.metric("Tilanteita yhteensä", len(df))
-                
-                with st.expander("Näytä raakadata"):
-                    st.dataframe(df)
-            else:
-                st.warning("Ottelusta ei löytynyt pelitapahtumia. Onko peli jo pelattu?")
-                
-        elif r.status_code == 404:
-            st.error("Virhe 404: Ottelua ei löytynyt. Pesistulokset on saattanut muuttaa ID:tä tai rajapintaa.")
-            st.info("Kokeile käyttää ID:tä 128853 (Tahko-KPL) testataksesi, toimiiko yhteys.")
+        # Luodaan yhteenveto pesäväleittäin
+        # Käytetään sarakkeita: Tilanne, Onnistuminen, Suorittava ulkopelaaja
+        
+        # Käännetään 'Onnistuminen' numeeriseksi jos se on tekstiä
+        if df['Onnistuminen'].dtype == 'object':
+            df['Sisäpeli_Onnistui'] = df['Onnistuminen'].str.contains('Onnistunut', case=False, na=False).astype(int)
         else:
-            st.error(f"Palvelinvirhe: {r.status_code}")
-            
-    except Exception as e:
-        st.error(f"Yhteysvirhe: {e}")
+            df['Sisäpeli_Onnistui'] = df['Onnistuminen']
 
-st.divider()
-st.caption("Vinkki: Jos API ei vastaa, voit ladata pelin CSV-tiedoston manuaalisesti ja pudottaa sen tähän.")
+        # Lasketaan torjunnat (1 - sisäpelin onnistuminen)
+        df['Torjunta'] = 1 - df['Sisäpeli_Onnistui']
+        
+        # Ryhmittely tilanteen mukaan
+        summary = df.groupby('Tilanne').agg(
+            Yritykset=('Onnistuminen', 'count'),
+            Torjunnat=('Torjunta', 'sum')
+        ).reset_index()
+        
+        summary['Torjunta%'] = (summary['Torjunnat'] / summary['Yritykset'] * 100).round(1)
+        
+        # Näytetään visualisointi
+        st.table(summary)
+        
+        # --- PELAAJA-ANALYYSI ---
+        if 'Suorittava ulkopelaaja' in df.columns:
+            st.subheader("🎯 Pelaajakohtaiset Torjunnat")
+            pelaaja_stats = df.groupby('Suorittava ulkopelaaja').agg(
+                Palot=('Torjunta', 'sum'),
+                Kaikki_Tilanteet=('Torjunta', 'count')
+            ).sort_values('Palot', ascending=False)
+            st.bar_chart(pelaaja_stats['Palot'])
+            
+        # --- LATAUS YHTIÖLLE ---
+        csv_export = summary.to_csv(index=False).encode('utf-8')
+        st.download_button(
+            label="📥 Lataa valmis raportti kertoimenlaskentaan",
+            data=csv_export,
+            file_name=f"UP_Raportti_{uploaded_file.name}.csv",
+            mime='text/csv',
+        )
+    else:
+        st.warning("Tiedostosta ei löytynyt sarakkeita 'Tilanne' ja 'Onnistuminen'. Varmista että käytät 'Syöttölomake'-pohjaa.")
+        st.write("Löytyneet sarakkeet:", df.columns.tolist())
+
+else:
+    st.info("Odotetaan tiedostoa. Voit ladata tähän esimerkiksi ottelun syöttölomakkeen CSV-muodossa.")
