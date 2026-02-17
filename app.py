@@ -1,57 +1,54 @@
 import streamlit as st
 import pandas as pd
 
-st.set_page_config(page_title="Pesis PRO: Syväanalyysi", layout="wide")
+# 1. Ladataan data
+st.title("⚾ Pesäpallon Ulkopelianalyysi")
+st.write("Tämä sovellus laskee ulkopelin tehokkuutta ottelutapahtumista.")
 
-st.title("⚾ Pesis-Analysaattori PRO (Deep Data)")
+# Huom: Muuta tiedostonimi vastaamaan omaa Exceliäsi tai CSV:täsi
+try:
+    df = pd.read_csv("testi_2.xlsx - Kysely1.csv") #
+    
+    # 2. Sivupalkin suodattimet
+    st.sidebar.header("Suodattimet")
+    jakso = st.sidebar.multiselect("Valitse jakso (period)", df['period'].unique(), default=df['period'].unique())
+    vuoro = st.sidebar.multiselect("Valitse vuoropari (inning)", df['inning'].unique(), default=df['inning'].unique())
 
-uploaded_file = st.file_uploader("Lataa laajennettu Excel", type=['csv', 'xlsx'])
+    filtered_df = df[(df['period'].isin(jakso)) & (df['inning'].isin(vuoro))] #
 
-if uploaded_file:
-    try:
-        # Luetaan data
-        df = pd.read_excel(uploaded_file) if uploaded_file.name.endswith('.xlsx') else pd.read_csv(uploaded_file)
+    # 3. Lasketaan tilastot per pesäväli
+    st.subheader("Ulkopelin tehokkuus pesäväleittäin")
+    pesat = ["1", "2", "3", "Koti"]
+    
+    stats_data = []
+    for pesa in pesat:
+        pesa_df = filtered_df[filtered_df['Kohdepesä'] == pesa] #
         
-        # FIX: Etsitään sarakkeet, vaikka niiden nimet olisivat muuttuneet
-        # Käytetään batter_player_id:tä jos lyoja_nimi puuttuu
-        lyoja_col = 'batter_player_id' if 'batter_player_id' in df.columns else (df.columns[0])
-        tulos_col = 'texts' if 'texts' in df.columns else None
-        palo_col = 'out' if 'out' in df.columns else None
-
-        st.success(f"Data ladattu! Rivimäärä: {len(df)}")
-
-        # --- 1. TORJUNTAPROSENTIT (PERUSTUEN 'OUT'-SARAKKEESEEN) ---
-        st.header("🛡️ Ulkopelin torjuntatehokkuus")
+        palot = len(pesa_df[pesa_df['Tyyppi'] == 'Palo']) #
+        haavat = len(pesa_df[pesa_df['Tyyppi'] == 'Haavoittuminen']) #
+        etenemiset = len(pesa_df[pesa_df['Tyyppi'] == 'Eteneminen']) #
+        yhteensa = palot + haavat + etenemiset
         
-        if tulos_col and palo_col:
-            # Lasketaan yritykset ja palot
-            # Tiedostossasi 'out' on True/False
-            summary = df.groupby(tulos_col).agg(
-                Yritykset=(palo_col, 'count'),
-                Palot=(palo_col, lambda x: (x == True).sum() if x.dtype == bool else (x == 'True').sum())
-            ).reset_index()
-            
-            summary['Torjunta%'] = (summary['Palot'] / summary['Yritykset'] * 100).round(1)
-            st.table(summary)
+        tehokkuus = (palot + haavat) / yhteensa * 100 if yhteensa > 0 else 0
+        
+        stats_data.append({
+            "Pesäväli": pesa,
+            "Palot": palot,
+            "Haavoittumiset": haavat,
+            "Etenemiset (SAFE)": etenemiset,
+            "Tehokkuus %": round(tehokkuus, 1)
+        })
 
-        # --- 2. LUKKARI-INDEKSI ---
-        st.header("🧙‍♂️ Lukkari-indeksi (Erikoistilanteet)")
-        if tulos_col:
-            # Etsitään 'texts' sarakkeesta erikoistermejä
-            erikois = df[df[tulos_col].astype(str).str.contains('väärä|laiton|vapaa|kärpänen', case=False, na=False)]
-            
-            col1, col2 = st.columns(2)
-            col1.metric("Erikoistapahtumat", len(erikois))
-            
-            if not erikois.empty:
-                st.write("Tarkat tapahtumat (texts-sarake):")
-                st.dataframe(erikois[[lyoja_col, tulos_col]])
+    stats_df = pd.DataFrame(stats_data)
+    st.table(stats_df)
 
-        # --- 3. RAAKADATA ---
-        with st.expander("Katso kaikki sarakkeet ja data"):
-            st.write("Löytyneet sarakkeet:", df.columns.tolist())
-            st.dataframe(df)
+    # 4. Erityistilanteet: Kärpäset ja Lukkarityö
+    st.subheader("Lukkari- ja erikoistilanteet")
+    karpaset = filtered_df[filtered_df['Tapahtuma'].str.contains("kärpänen", case=False, na=False)]
+    st.write(f"Tunnistetut kärpäset: **{len(karpaset)}**")
+    
+    if len(karpaset) > 0:
+        st.write(karpaset[['period', 'inning', 'Tapahtuma']]) #
 
-    except Exception as e:
-        st.error(f"Virhe analyysissa: {e}")
-        st.info("Vinkki: Power Query saattaa nimetä sarakkeet eri tavalla jokaisella laajennuskerralla.")
+except Exception as e:
+    st.error(f"Lataa data ensin! Virhe: {e}")
