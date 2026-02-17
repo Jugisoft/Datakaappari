@@ -3,59 +3,50 @@ import pandas as pd
 
 st.set_page_config(page_title="Pesis PRO-Analysaattori", layout="wide")
 
-st.title("⚾ Pesis-Analysaattori: Power Query Import")
+st.title("⚾ Pesis-Analysaattori (Excel & CSV Import)")
 
-# Ohjeistus
-st.info("Pudota alle Power Queryllä tallentamasi 'events_.csv' tiedosto.")
+st.info("Lataa Power Queryllä haettu tiedosto (testi_1.xlsx tai events_.csv) tähän alapuolelle.")
 
-uploaded_file = st.file_uploader("Valitse otteludata (CSV)", type=['csv'])
+uploaded_file = st.file_uploader("Valitse tiedosto", type=['csv', 'xlsx'])
 
 if uploaded_file:
-    # Luetaan data (huomioidaan Power Queryn mahdolliset erikoisuudet)
-    df = pd.read_csv(uploaded_file)
-    
-    st.success(f"Analysoidaan ottelua. Tapahtumia yhteensä: {len(df)}")
-
-    # --- 1. TORJUNTAPROSENTIT (Vedonlyöntiyhtiön standardi) ---
-    st.header("🛡️ Ulkopelin torjuntatilastot")
-    
-    # Suodatetaan vain ne rivit, joissa on yritys pesävälillä
-    # Katsotaan 'pesat_teksti' ja 'tulos_teksti'
-    if 'pesat_teksti' in df.columns and 'tulos_teksti' in df.columns:
-        # Lasketaan yritykset ja palot per väli
-        summary = df.groupby('pesat_teksti').agg(
-            Yritykset=('tulos_teksti', 'count'),
-            Torjunnat=('tulos_teksti', lambda x: (x.str.contains('Palo', na=False)).sum())
-        ).reset_index()
+    try:
+        # Automaattinen tunnistus tiedostopäätteen mukaan
+        if uploaded_file.name.endswith('.xlsx'):
+            df = pd.read_excel(uploaded_file)
+        else:
+            df = pd.read_csv(uploaded_file, sep=None, engine='python')
         
-        # Lasketaan prosentit
-        summary['Torjunta%'] = (summary['Torjunnat'] / summary['Yritykset'] * 100).round(1)
-        
-        # Järjestetään loogisesti: 0-1, 1-2, 2-3, 3-Koti
-        vali_jarjestys = {"0-1": 1, "1-2": 2, "2-3": 3, "3-Koti": 4}
-        summary['order'] = summary['pesat_teksti'].map(vali_jarjestys)
-        summary = summary.sort_values('order').drop('order', axis=1)
-        
-        st.table(summary)
-        
+        st.success(f"Tiedosto luettu onnistuneesti! Tapahtumia: {len(df)}")
 
-    # --- 2. LUKKARIN JA ULKOPELAAJIEN ERIKOISET ---
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("👤 Ulkopelaajien palot")
-        # Jos datassa on ulkopelaaja-sarake (tapahtuma_teksti sisältää usein nimen)
-        st.write("Yleisimmät tapahtumat:")
-        st.write(df['tapahtuma_teksti'].value_counts().head(10))
+        # --- ANALYYSI OSA ---
+        st.header("📊 Ottelun torjuntatilastot")
+        
+        # Tarkistetaan löytyykö tarvittavat sarakkeet
+        needed_cols = ['pesat_teksti', 'tulos_teksti']
+        if all(col in df.columns for col in needed_cols):
+            
+            # Lasketaan yritykset ja palot (torjunnat)
+            summary = df.groupby('pesat_teksti').agg(
+                Yritykset=('tulos_teksti', 'count'),
+                Torjunnat=('tulos_teksti', lambda x: (x.astype(str).str.contains('Palo', case=False, na=False)).sum())
+            ).reset_index()
+            
+            summary['Torjunta%'] = (summary['Torjunnat'] / summary['Yritykset'] * 100).round(1)
+            
+            # Järjestetään pesävälit loogisesti
+            vali_jarjestys = {"0-1": 1, "1-2": 2, "2-3": 3, "3-Koti": 4}
+            summary['order'] = summary['pesat_teksti'].map(vali_jarjestys)
+            summary = summary.sort_values('order').drop('order', axis=1).fillna(0)
+            
+            st.table(summary)
+            
+        else:
+            st.warning("Tiedostosta puuttuu sarakkeita. Varmista, että laajensit Power Queryssä kaikki kentät (lyoja_nimi, tulos_teksti jne.)")
 
-    with col2:
-        st.subheader("🎯 Lyöntisuunnat")
-        if 'lyonni_suunta' in df.columns:
-            st.bar_chart(df['lyonni_suunta'].value_counts())
+        # --- LISÄTIEDOT ---
+        with st.expander("Näytä raakadata"):
+            st.dataframe(df)
 
-    # --- 3. RAAKADATA EXPORT ---
-    st.divider()
-    with st.expander("Selaa ja lataa puhdistettu data"):
-        st.dataframe(df)
-        csv = df.to_csv(index=False).encode('utf-8')
-        st.download_button("Lataa puhdistettu CSV", csv, "puhdistettu_data.csv", "text/csv")
+    except Exception as e:
+        st.error(f"Virhe tiedoston luvussa: {e}")
