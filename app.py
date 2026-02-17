@@ -1,56 +1,46 @@
 import streamlit as st
 import pandas as pd
 import requests
-from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="Pesis-Kaappari", layout="wide")
-
-st.title("⚾ Otteludatan haku")
-
-ottelu_id = st.text_input("Syötä Ottelu-ID (esim. 128858)", "128858")
-
-if st.button("Hae ottelun tapahtumat"):
-    # Yritetään hakea suoraan sivun osoitteesta
-    url = f"https://www.pesistulokset.fi/ottelut/{ottelu_id}"
-    
+# Yritetään hakea suoraan uuden järjestelmän JSON-syötettä
+def hae_otteludata(id):
+    # Tämä on se "salainen" polku, jota sivu käyttää taustalla
+    url = f"https://v2.pesistulokset.fi/api/ottelu/{id}"
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Referer": f"https://www.pesistulokset.fi/ottelut/{id}"
     }
-
-    try:
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code == 200:
-            st.success("Yhteys sivustoon saatu!")
-            
-            # Tässä kohtaa uusi sivusto lataa datan JavaScriptillä, 
-            # mikä on Pythonille vaikeaa ilman raskaampia työkaluja.
-            # JOTEN: Lisätään hätävara-ohje ja tiedostonluku:
-            
-            st.info("Uusi sivusto on suojattu suoralta luvulta. Voit kuitenkin hakea datan näin:")
-            st.markdown(f"""
-            1. Mene osoitteeseen: [https://www.pesistulokset.fi/ottelut/{ottelu_id}](https://www.pesistulokset.fi/ottelut/{ottelu_id})
-            2. Klikkaa **'Ottelutapahtumat'**
-            3. Maalaa ja kopioi taulukko.
-            4. Tallenna se CSV-tiedostoksi ja lataa se tähän alapuolelle analyysia varten.
-            """)
-            
-        else:
-            st.error(f"Sivua ei löytynyt (Virhe {response.status_code})")
-    except Exception as e:
-        st.error(f"Virhe: {e}")
-
-st.divider()
-
-# TÄMÄ ON SE TOIMIVA OSA:
-st.subheader("📁 Lataa kopioimasi data")
-uploaded_file = st.file_uploader("Lataa otteludata (CSV tai Excel)", type=['csv', 'xlsx'])
-
-if uploaded_file:
-    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
-    st.write("### Ottelun raakadata:")
-    st.dataframe(df)
     
-    # Mahdollisuus ladata puhdistettu versio
-    csv = df.to_csv(index=False).encode('utf-8')
-    st.download_button("Tallenna puhdistettu CSV", csv, "ottelu_export.csv", "text/csv")
+    response = requests.get(url, headers=headers)
+    if response.status_code == 200:
+        return response.json()
+    else:
+        return None
+
+st.title("⚾ Otteludatan Syväkaappaus")
+
+ottelu_id = "128858" # Sinun linkkisi ID
+
+if st.button("Pura pöytäkirjan data"):
+    data = hae_otteludata(ottelu_id)
+    
+    if data:
+        st.success("Yhteys saatu! Puretaan tapahtumat...")
+        
+        # Pöytäkirjan tapahtumat ovat usein listana
+        tapahtumat = data.get('tapahtumat', [])
+        
+        if tapahtumat:
+            df = pd.DataFrame(tapahtumat)
+            
+            # Tässä on se data mitä etsit: kuka löi, mihin, ja mitä kävi
+            st.write("### Kaikki ottelutapahtumat")
+            st.dataframe(df)
+            
+            # Tehdään tästä CSV
+            csv = df.to_csv(index=False).encode('utf-8')
+            st.download_button("Lataa raaka pöytäkirjadata (CSV)", csv, f"poytakirja_{ottelu_id}.csv")
+        else:
+            st.warning("Ottelu löytyi, mutta tapahtumalista on tyhjä. Peli ei ehkä ole vielä alkanut tai se on arkistoitu eri tavalla.")
+    else:
+        st.error("Palvelin hylkäsi pyynnön. Rajapinta on suojattu.")
