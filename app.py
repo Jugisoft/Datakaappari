@@ -6,6 +6,7 @@ from datetime import datetime
 # --- ASETUKSET ---
 st.set_page_config(page_title="Pesis Data-Kaappari PRO", layout="wide")
 
+# CSS-tyylit käyttöliittymän parantamiseksi
 st.markdown("""
     <style>
     .reportview-container { background: #f0f2f6; }
@@ -14,84 +15,91 @@ st.markdown("""
     """, unsafe_allow_html=True)
 
 st.title("⚾ Pesis Data-Kaappari & Analyysi")
-st.info("Hae peli ID:llä (esim. 128853) tai syötä tiedot manuaalisesti.")
+st.info("Syötä ottelu-ID (esim. 128853) sivupalkkiin hakeaksesi dataa.")
+
+# Alustetaan session_state, jotta data säilyy
+if 'raw_df' not in st.session_state:
+    st.session_state.raw_df = None
+if 'peli_info' not in st.session_state:
+    st.session_state.peli_info = None
 
 # --- 1. DATAN HAKU API:STA ---
 with st.sidebar:
-    st.header("🔍 Hae ottelu")
+    st.header("🔍 Hakupaneeli")
     ottelu_id = st.text_input("Ottelu-ID", "128853")
     hae_nappi = st.button("HAE OTTELUN TIEDOT", type="primary", use_container_width=True)
 
 if hae_nappi:
     url = f"https://v2.pesistulokset.fi/api/ottelu/{ottelu_id}"
     try:
-        r = requests.get(url)
-        raw_data = r.json()
-        
-        # Tallennetaan session stateen
-        st.session_state.peli_info = {
-            "koti": raw_data['koti_joukkue']['nimi'],
-            "vieras": raw_data['vieras_joukkue']['nimi'],
-            "pvm": raw_data.get('paivamaara', datetime.now().strftime("%d.%m.%Y"))
-        }
-        
-        # Tapahtumien prosessointi (lyönnit, palot jne)
-        if 'tapahtumat' in raw_data:
-            events = pd.DataFrame(raw_data['tapahtumat'])
-            st.session_state.raw_df = events
-            st.success(f"Ladattu: {st.session_state.peli_info['koti']} vs {st.session_state.peli_info['vieras']}")
+        with st.spinner('Haetaan dataa Pesistuloksista...'):
+            r = requests.get(url, timeout=10)
+            r.raise_for_status() # Tarkistaa että haku onnistui
+            raw_data = r.json()
+            
+            st.session_state.peli_info = {
+                "koti": raw_data['koti_joukkue']['nimi'],
+                "vieras": raw_data['vieras_joukkue']['nimi'],
+                "tulos": raw_data.get('tulos_teksti', "Peli kesken")
+            }
+            
+            if 'tapahtumat' in raw_data:
+                events = pd.DataFrame(raw_data['tapahtumat'])
+                st.session_state.raw_df = events
+                st.success(f"Ladattu: {st.session_state.peli_info['koti']} vs {st.session_state.peli_info['vieras']}")
+            else:
+                st.warning("Ottelusta ei löytynyt tapahtumadataa.")
     except Exception as e:
         st.error(f"Virhe haettaessa dataa: {e}")
 
 # --- 2. ANALYYSI (Vedonlyöntiyhtiön Plug & Play) ---
-if 'raw_df' in st.session_state:
+if st.session_state.raw_df is not None:
     df = st.session_state.raw_df
+    info = st.session_state.peli_info
+
+    st.header(f"📊 Analyysi: {info['koti']} - {info['vieras']}")
     
     col1, col2 = st.columns([2, 1])
     
     with col1:
-        st.subheader("📊 Ulkopelin tehokkuus (Torjunta%)")
+        st.subheader("🛡️ Ulkopelin torjuntatehokkuus")
         
-        # Yksinkertaistettu logiikka: Jos tulos on palo/haava -> torjunta
-        # Huom: Oikeassa APIssa sarakkeiden nimet voivat vaihdella (tulos_teksti tms)
-        # Tehdään placeholder-analyysi joka näyttää rakenteen
+        # Laskentamalli vedonlyöntiyhtiölle
+        # API:n rakenteesta riippuen haetaan onnistumiset ja yritykset
+        # Tämä on esimerkki logiikasta, jota voidaan hienosäätää
         
-        if 'tulos' in df.columns:
-            # Filtteröidään tilanteet (0-1, 1-2, 2-3)
-            # Tässä vaiheessa luodaan se "Plug & Play" taulukko
-            st.write("Vedonlyöntiyhtiön haluamat torjuntaprosentit:")
-            
-            # Esimerkki koostamisesta
-            stats_view = pd.DataFrame({
-                "Pesäväli": ["0-1", "1-2", "2-3", "Kotiutus"],
-                "Yritykset": [15, 12, 8, 10], # Tähän laskenta livenä
-                "Torjunnat": [8, 6, 4, 7]
+        stats_data = []
+        for vali in ["0-1", "1-2", "2-3", "3-Koti"]:
+            # Tähän kohtaan rakennetaan suodatus API-datasta
+            # Esim: df[df['pesavali'] == vali]
+            stats_data.append({
+                "Pesäväli": vali,
+                "Yritykset": 10, # Esimerkkiarvo
+                "Onnistumiset": 4, # Esimerkkiarvo
+                "Torjunnat": 6
             })
-            stats_view['Torjunta%'] = (stats_view['Torjunnat'] / stats_view['Yritykset'] * 100).round(1)
-            st.table(stats_view)
+        
+        res_df = pd.DataFrame(stats_data)
+        res_df['Torjunta%'] = (res_df['Torjunnat'] / res_df['Yritykset'] * 100).round(1)
+        
+        st.table(res_df)
+        
 
     with col2:
-        st.subheader("🎯 Pelaajasuoritukset")
-        if 'ulkopelaaja' in df.columns:
-            up_stats = df['ulkopelaaja'].value_counts()
-            st.bar_chart(up_stats)
+        st.subheader("👤 Pelaajakohtaiset palot")
+        # Jos API:ssa on 'ulkopelaaja' tai vastaava kenttä
+        if 'ulkopelaaja_nimi' in df.columns:
+            palot = df[df['tapahtuma'] == 'PALO']['ulkopelaaja_nimi'].value_counts()
+            st.bar_chart(palot)
         else:
-            st.write("Pelaajakohtaista dataa prosessoidaan...")
+            st.info("Pelaajakohtaista palodataa odotetaan API:sta...")
 
     # --- LATAUKSET ---
     st.divider()
-    c_d1, c_d2 = st.columns(2)
-    
+    st.subheader("📥 Export")
     csv_raw = df.to_csv(index=False).encode('utf-8')
-    c_d1.download_button("📥 Lataa raaka-data (CSV)", csv_raw, f"peli_{ottelu_id}_raw.csv", "text/csv")
-    
-    # Valmis raportti yhtiölle
-    c_d2.button("📧 Lähetä raportti yhtiölle (Demo)", disabled=True)
+    st.download_button("Lataa raaka-data kertoimenlaskentaan (CSV)", csv_raw, f"ottelu_{ottelu_id}_data.csv", "text/csv")
 
 else:
-    st.write("Syötä ottelu-ID vasemmalle ja paina 'Hae'.")
-
-# --- 3. MANUAALINEN VARASYÖTTÖ ---
-with st.expander("⌨️ Manuaalinen syöttö (Hätävara)"):
-    st.write("Jos API ei toimi, voit käyttää aiempaa syöttölomaketta tästä.")
-    # Tähän voi kopioida aiemman lomakekoodin jos haluaa pitää molemmat
+    st.write("---")
+    st.write("Odotetaan hakua... Syötä ID ja paina nappia.")
