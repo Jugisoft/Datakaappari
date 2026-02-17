@@ -6,67 +6,66 @@ st.set_page_config(page_title="Pesis-Analysaattori PRO", layout="wide")
 
 st.title("⚾ Pesis-Analysaattori")
 
-# Palkki haulle
 with st.sidebar:
     st.header("Hae Ottelu")
-    # Linkistä https://www.pesistulokset.fi/ottelut/128858 ID on 128858
+    # Kokeillaan ID:tä 128858
     ottelu_id = st.text_input("Ottelu-ID", "128858")
     hae = st.button("HAE JA ANALYSOI", type="primary", use_container_width=True)
 
 if hae:
-    # Käytetään ensisijaisesti tätä API-polkua
+    # UUSI OSOITE: Pesistulokset.fi uusi rajapinta käyttää tätä muotoa
+    # Huom: Jos peli on vuodelta 2024 tai 2025, polku voi vaihdella
     api_url = f"https://v2.pesistulokset.fi/api/ottelu/{ottelu_id}"
     
-    # Lisätään otsikot, jotta palvelin ei hylkää pyyntöä
     headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+        "Accept": "application/json"
     }
     
     try:
         r = requests.get(api_url, headers=headers, timeout=10)
         
-        # Tarkistetaan vastaus ennen JSON-muunnosta
         if r.status_code == 200:
             data = r.json()
             
-            koti = data['koti_joukkue']['nimi']
-            vieras = data['vieras_joukkue']['nimi']
+            # Perustiedot
+            koti = data.get('koti_joukkue', {}).get('nimi', 'Koti')
+            vieras = data.get('vieras_joukkue', {}).get('nimi', 'Vieras')
+            st.success(f"Ottelu löytyi: {koti} - {vieras}")
             
-            st.success(f"Yhteys muodostettu: {koti} - {vieras}")
-            
-            # Tapahtumadata
-            if 'tapahtumat' in data and len(data['tapahtumat']) > 0:
-                df = pd.DataFrame(data['tapahtumat'])
+            # Tapahtumat
+            tapahtumat = data.get('tapahtumat', [])
+            if tapahtumat:
+                df = pd.DataFrame(tapahtumat)
                 
-                # --- VISUALISOINTI ---
-                st.subheader("🛡️ Ulkopelin tilanneanalyysi")
+                # --- VEDONLYÖNTIANALYYSI ---
+                st.subheader("🛡️ Ulkopelin analyysi (Plug & Play)")
                 
-                # Lasketaan yritykset ja torjunnat (yksinkertaistettu esimerkki)
-                # Oikeassa datassa suodatetaan 'tapahtuma_teksti' perusteella
-                
-                col1, col2, col3 = st.columns(3)
-                col1.metric("Tapahtumia yhteensä", len(df))
-                
-                if 'tulos_teksti' in df.columns:
-                    palot = len(df[df['tapahtuma_teksti'].str.contains('Palo', case=False, na=False)])
-                    col2.metric("Palot (Torjunnat)", palot)
+                # Lasketaan torjunnat ja yritykset
+                # Suodatetaan pois tyhjät tai epäolennaiset rivit
+                if 'tapahtuma_teksti' in df.columns:
+                    col1, col2, col3 = st.columns(3)
                     
-                    kärkilyönnit = len(df[df['tapahtuma_teksti'].str.contains('Kärkilyönti', case=False, na=False)])
-                    col3.metric("Kärkilyönnit (Päästetyt)", kärkilyönnit)
-
-                # Näytetään raaka-data
-                with st.expander("Katso kaikki ottelutapahtumat"):
-                    st.dataframe(df, use_container_width=True)
+                    palot = len(df[df['tapahtuma_teksti'] == 'Palo'])
+                    juoksut = len(df[df['tapahtuma_teksti'] == 'Juoksu'])
+                    
+                    col1.metric("Torjunnat (Palot)", palot)
+                    col2.metric("Päästetyt juoksut", juoksut)
+                    col3.metric("Tilanteita yhteensä", len(df))
                 
-                # CSV Lataus vedonlyöntiyhtiölle
-                csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button("📥 Lataa Plug & Play CSV", csv, f"pesis_peli_{ottelu_id}.csv", "text/csv")
-                
+                with st.expander("Näytä raakadata"):
+                    st.dataframe(df)
             else:
-                st.warning("Ottelusta löytyi perustiedot, mutta ei vielä pelitapahtumia (onko peli alkanut?)")
+                st.warning("Ottelusta ei löytynyt pelitapahtumia. Onko peli jo pelattu?")
+                
+        elif r.status_code == 404:
+            st.error("Virhe 404: Ottelua ei löytynyt. Pesistulokset on saattanut muuttaa ID:tä tai rajapintaa.")
+            st.info("Kokeile käyttää ID:tä 128853 (Tahko-KPL) testataksesi, toimiiko yhteys.")
         else:
-            st.error(f"Palvelin vastasi virheellä: {r.status_code}. Rajapinta saattaa olla tilapäisesti poissa käytöstä.")
-
+            st.error(f"Palvelinvirhe: {r.status_code}")
+            
     except Exception as e:
-        st.error(f"Virhe: {e}")
-        st.info("Kokeile tarkistaa, että ID on pelkkä numero ilman välilyöntejä.")
+        st.error(f"Yhteysvirhe: {e}")
+
+st.divider()
+st.caption("Vinkki: Jos API ei vastaa, voit ladata pelin CSV-tiedoston manuaalisesti ja pudottaa sen tähän.")
