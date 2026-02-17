@@ -1,47 +1,61 @@
 import streamlit as st
 import pandas as pd
-import requests
 
-st.title("⚾ Pöytäkirjan syväpurku")
+st.set_page_config(page_title="Pesis PRO-Analysaattori", layout="wide")
 
-ottelu_id = st.text_input("Syötä ID", "128858")
+st.title("⚾ Pesis-Analysaattori: Power Query Import")
 
-if st.button("Pura data"):
-    # TÄMÄ on se osoite, josta sivu oikeasti hakee tiedot
-    api_url = f"https://v2.pesistulokset.fi/api/ottelu/{ottelu_id}"
+# Ohjeistus
+st.info("Pudota alle Power Queryllä tallentamasi 'events_.csv' tiedosto.")
+
+uploaded_file = st.file_uploader("Valitse otteludata (CSV)", type=['csv'])
+
+if uploaded_file:
+    # Luetaan data (huomioidaan Power Queryn mahdolliset erikoisuudet)
+    df = pd.read_csv(uploaded_file)
     
-    headers = {
-        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-        "Origin": "https://www.pesistulokset.fi",
-        "Referer": "https://www.pesistulokset.fi/"
-    }
+    st.success(f"Analysoidaan ottelua. Tapahtumia yhteensä: {len(df)}")
 
-    try:
-        r = requests.get(api_url, headers=headers)
+    # --- 1. TORJUNTAPROSENTIT (Vedonlyöntiyhtiön standardi) ---
+    st.header("🛡️ Ulkopelin torjuntatilastot")
+    
+    # Suodatetaan vain ne rivit, joissa on yritys pesävälillä
+    # Katsotaan 'pesat_teksti' ja 'tulos_teksti'
+    if 'pesat_teksti' in df.columns and 'tulos_teksti' in df.columns:
+        # Lasketaan yritykset ja palot per väli
+        summary = df.groupby('pesat_teksti').agg(
+            Yritykset=('tulos_teksti', 'count'),
+            Torjunnat=('tulos_teksti', lambda x: (x.str.contains('Palo', na=False)).sum())
+        ).reset_index()
         
-        if r.status_code == 200:
-            json_data = r.json()
-            st.success("Yhteys onnistui! Data löytyi.")
-            
-            # Puretaan tapahtumat (lyönnit, suunnat, palot jne)
-            tapahtumat = json_data.get('tapahtumat', [])
-            if tapahtumat:
-                df = pd.DataFrame(tapahtumat)
-                st.write("### Ottelun tapahtumat (Pöytäkirja)")
-                st.dataframe(df)
-                
-                # Lataus
-                csv = df.to_csv(index=False).encode('utf-8')
-                st.download_button("Lataa raakadata CSV", csv, f"{ottelu_id}_data.csv")
-            else:
-                st.warning("Data löytyi, mutta se on tyhjä. Peli saattaa olla liian vanha tai vasta tulossa.")
-        else:
-            st.error(f"Palvelin ei anna dataa (Virhe {r.status_code})")
-            st.info("Tämä tarkoittaa, että liitto on estänyt automaattiset haut pilvipalveluista.")
-            
-    except Exception as e:
-        st.error(f"Virhe: {e}")
+        # Lasketaan prosentit
+        summary['Torjunta%'] = (summary['Torjunnat'] / summary['Yritykset'] * 100).round(1)
+        
+        # Järjestetään loogisesti: 0-1, 1-2, 2-3, 3-Koti
+        vali_jarjestys = {"0-1": 1, "1-2": 2, "2-3": 3, "3-Koti": 4}
+        summary['order'] = summary['pesat_teksti'].map(vali_jarjestys)
+        summary = summary.sort_values('order').drop('order', axis=1)
+        
+        st.table(summary)
+        
 
-st.divider()
-st.subheader("💡 Miksi tämä on niin vaikeaa?")
-st.write("Sivusto lataa datan 'salaoven' kautta. Jos tämä nappi ei toimi, liitto on sulkenut oven roboteilta.")
+    # --- 2. LUKKARIN JA ULKOPELAAJIEN ERIKOISET ---
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.subheader("👤 Ulkopelaajien palot")
+        # Jos datassa on ulkopelaaja-sarake (tapahtuma_teksti sisältää usein nimen)
+        st.write("Yleisimmät tapahtumat:")
+        st.write(df['tapahtuma_teksti'].value_counts().head(10))
+
+    with col2:
+        st.subheader("🎯 Lyöntisuunnat")
+        if 'lyonni_suunta' in df.columns:
+            st.bar_chart(df['lyonni_suunta'].value_counts())
+
+    # --- 3. RAAKADATA EXPORT ---
+    st.divider()
+    with st.expander("Selaa ja lataa puhdistettu data"):
+        st.dataframe(df)
+        csv = df.to_csv(index=False).encode('utf-8')
+        st.download_button("Lataa puhdistettu CSV", csv, "puhdistettu_data.csv", "text/csv")
