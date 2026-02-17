@@ -1,73 +1,56 @@
 import streamlit as st
 import pandas as pd
+import requests
+from bs4 import BeautifulSoup
 
-st.set_page_config(page_title="Pesis Data-Hub PRO", layout="wide")
+st.set_page_config(page_title="Pesis-Kaappari", layout="wide")
 
-st.title("⚾ Pesis Data-Hub: Vedonlyönti-Export")
+st.title("⚾ Otteludatan haku")
 
-# --- TIEDOSTON LATAUS ---
-st.subheader("📁 Lataa Excel tai CSV")
-uploaded_file = st.file_uploader("Raahaa tähän UP-tilasto tai Syöttölomake", type=['csv', 'xlsx'])
+ottelu_id = st.text_input("Syötä Ottelu-ID (esim. 128858)", "128858")
+
+if st.button("Hae ottelun tapahtumat"):
+    # Yritetään hakea suoraan sivun osoitteesta
+    url = f"https://www.pesistulokset.fi/ottelut/{ottelu_id}"
+    
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+
+    try:
+        response = requests.get(url, headers=headers)
+        
+        if response.status_code == 200:
+            st.success("Yhteys sivustoon saatu!")
+            
+            # Tässä kohtaa uusi sivusto lataa datan JavaScriptillä, 
+            # mikä on Pythonille vaikeaa ilman raskaampia työkaluja.
+            # JOTEN: Lisätään hätävara-ohje ja tiedostonluku:
+            
+            st.info("Uusi sivusto on suojattu suoralta luvulta. Voit kuitenkin hakea datan näin:")
+            st.markdown(f"""
+            1. Mene osoitteeseen: [https://www.pesistulokset.fi/ottelut/{ottelu_id}](https://www.pesistulokset.fi/ottelut/{ottelu_id})
+            2. Klikkaa **'Ottelutapahtumat'**
+            3. Maalaa ja kopioi taulukko.
+            4. Tallenna se CSV-tiedostoksi ja lataa se tähän alapuolelle analyysia varten.
+            """)
+            
+        else:
+            st.error(f"Sivua ei löytynyt (Virhe {response.status_code})")
+    except Exception as e:
+        st.error(f"Virhe: {e}")
+
+st.divider()
+
+# TÄMÄ ON SE TOIMIVA OSA:
+st.subheader("📁 Lataa kopioimasi data")
+uploaded_file = st.file_uploader("Lataa otteludata (CSV tai Excel)", type=['csv', 'xlsx'])
 
 if uploaded_file:
-    # Luetaan data
-    if uploaded_file.name.endswith('.csv'):
-        df = pd.read_csv(uploaded_file)
-    else:
-        df = pd.read_excel(uploaded_file)
+    df = pd.read_csv(uploaded_file) if uploaded_file.name.endswith('.csv') else pd.read_excel(uploaded_file)
+    st.write("### Ottelun raakadata:")
+    st.dataframe(df)
     
-    st.success(f"Ladattu: {uploaded_file.name}")
-    
-    # --- AUTOMAATTINEN MAPPING ---
-    # Etsitään sarakkeet jotka vastaavat yhtiön tarpeita
-    # (Perustuen antamiisi tiedostoihin)
-    
-    if 'Tilanne' in df.columns and 'Onnistuminen' in df.columns:
-        st.header("📊 Vedonlyöntiyhtiön Plug & Play -raportti")
-        
-        # Luodaan yhteenveto pesäväleittäin
-        # Käytetään sarakkeita: Tilanne, Onnistuminen, Suorittava ulkopelaaja
-        
-        # Käännetään 'Onnistuminen' numeeriseksi jos se on tekstiä
-        if df['Onnistuminen'].dtype == 'object':
-            df['Sisäpeli_Onnistui'] = df['Onnistuminen'].str.contains('Onnistunut', case=False, na=False).astype(int)
-        else:
-            df['Sisäpeli_Onnistui'] = df['Onnistuminen']
-
-        # Lasketaan torjunnat (1 - sisäpelin onnistuminen)
-        df['Torjunta'] = 1 - df['Sisäpeli_Onnistui']
-        
-        # Ryhmittely tilanteen mukaan
-        summary = df.groupby('Tilanne').agg(
-            Yritykset=('Onnistuminen', 'count'),
-            Torjunnat=('Torjunta', 'sum')
-        ).reset_index()
-        
-        summary['Torjunta%'] = (summary['Torjunnat'] / summary['Yritykset'] * 100).round(1)
-        
-        # Näytetään visualisointi
-        st.table(summary)
-        
-        # --- PELAAJA-ANALYYSI ---
-        if 'Suorittava ulkopelaaja' in df.columns:
-            st.subheader("🎯 Pelaajakohtaiset Torjunnat")
-            pelaaja_stats = df.groupby('Suorittava ulkopelaaja').agg(
-                Palot=('Torjunta', 'sum'),
-                Kaikki_Tilanteet=('Torjunta', 'count')
-            ).sort_values('Palot', ascending=False)
-            st.bar_chart(pelaaja_stats['Palot'])
-            
-        # --- LATAUS YHTIÖLLE ---
-        csv_export = summary.to_csv(index=False).encode('utf-8')
-        st.download_button(
-            label="📥 Lataa valmis raportti kertoimenlaskentaan",
-            data=csv_export,
-            file_name=f"UP_Raportti_{uploaded_file.name}.csv",
-            mime='text/csv',
-        )
-    else:
-        st.warning("Tiedostosta ei löytynyt sarakkeita 'Tilanne' ja 'Onnistuminen'. Varmista että käytät 'Syöttölomake'-pohjaa.")
-        st.write("Löytyneet sarakkeet:", df.columns.tolist())
-
-else:
-    st.info("Odotetaan tiedostoa. Voit ladata tähän esimerkiksi ottelun syöttölomakkeen CSV-muodossa.")
+    # Mahdollisuus ladata puhdistettu versio
+    csv = df.to_csv(index=False).encode('utf-8')
+    st.download_button("Tallenna puhdistettu CSV", csv, "ottelu_export.csv", "text/csv")
