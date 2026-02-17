@@ -9,68 +9,64 @@ st.title("⚾ Pesis-Analysaattori")
 # Palkki haulle
 with st.sidebar:
     st.header("Hae Ottelu")
-    # Otetaan ID talteen URL:sta (esim. 128858)
+    # Linkistä https://www.pesistulokset.fi/ottelut/128858 ID on 128858
     ottelu_id = st.text_input("Ottelu-ID", "128858")
     hae = st.button("HAE JA ANALYSOI", type="primary", use_container_width=True)
 
 if hae:
-    # Uusi API-osoite joka vastaa uutta pesistulokset.fi-rakennetta
+    # Käytetään ensisijaisesti tätä API-polkua
     api_url = f"https://v2.pesistulokset.fi/api/ottelu/{ottelu_id}"
     
+    # Lisätään otsikot, jotta palvelin ei hylkää pyyntöä
+    headers = {
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    }
+    
     try:
-        r = requests.get(api_url)
-        data = r.json()
+        r = requests.get(api_url, headers=headers, timeout=10)
         
-        koti = data['koti_joukkue']['nimi']
-        vieras = data['vieras_joukkue']['nimi']
-        
-        st.header(f"{koti} vs. {vieras}")
-        
-        # Tapahtumadata
-        df = pd.DataFrame(data['tapahtumat'])
-        
-        # --- PLUG & PLAY ANALYYSI VEDONLYÖNTIYHTIÖLLE ---
-        st.subheader("🛡️ Ulkopelin torjuntatilastot (Live)")
-        
-        # Määritellään onnistumiset sisäpelin kannalta
-        # (Tulostekstit voivat vaihdella: 'Palo', 'Kärkilyönti', 'Juoksu')
-        if 'tulos_teksti' in df.columns:
-            # Filtteröidään tilanteet (esim. 0-1 väli on tilanne jossa 1-pesä tyhjä ja yritys sinne)
-            # Tässä yksinkertaistettu malli joka näyttää logiikan:
+        # Tarkistetaan vastaus ennen JSON-muunnosta
+        if r.status_code == 200:
+            data = r.json()
             
-            summary_data = []
-            vapaat = ["Vapaataival", "Harha"] # Vedonlyöntiyhtiön "V" ja "HH" sarakkeet
+            koti = data['koti_joukkue']['nimi']
+            vieras = data['vieras_joukkue']['nimi']
             
-            for vali in ["0-1", "1-2", "2-3", "Kotiutus"]:
-                # Etsitään kaikki yritykset kyseiselle välille
-                # (Oikeassa datassa katsotaan pesätilanne-saraketta)
-                yritykset = len(df) // 4 # Demo-luku
-                palot = len(df[df['tapahtuma_teksti'] == 'Palo']) // 4
+            st.success(f"Yhteys muodostettu: {koti} - {vieras}")
+            
+            # Tapahtumadata
+            if 'tapahtumat' in data and len(data['tapahtumat']) > 0:
+                df = pd.DataFrame(data['tapahtumat'])
                 
-                summary_data.append({
-                    "Pesäväli": vali,
-                    "Yritykset (Y)": yritykset,
-                    "Torjunnat (T)": palot,
-                    "Torjunta-%": round((palot/yritykset)*100, 1) if yritykset > 0 else 0
-                })
-            
-            st.table(pd.DataFrame(summary_data))
-            
-            # --- LUKKARI JA PELAAJASPESIAALIT ---
-            st.subheader("👤 Ulkopelaajien suoritukset")
-            up_cols = st.columns(2)
-            
-            # Kärpäset (Lukkari)
-            karpaset = len(df[df['tapahtuma_teksti'].str.contains('kärpänen', case=False, na=False)])
-            up_cols[0].metric("Lukkarin kärpäset", karpaset)
-            
-            # Harhaheitot
-            harhat = len(df[df['tulos_teksti'].str.contains('harha', case=False, na=False)])
-            up_cols[1].metric("Päästetyt harhat", harhat)
+                # --- VISUALISOINTI ---
+                st.subheader("🛡️ Ulkopelin tilanneanalyysi")
+                
+                # Lasketaan yritykset ja torjunnat (yksinkertaistettu esimerkki)
+                # Oikeassa datassa suodatetaan 'tapahtuma_teksti' perusteella
+                
+                col1, col2, col3 = st.columns(3)
+                col1.metric("Tapahtumia yhteensä", len(df))
+                
+                if 'tulos_teksti' in df.columns:
+                    palot = len(df[df['tapahtuma_teksti'].str.contains('Palo', case=False, na=False)])
+                    col2.metric("Palot (Torjunnat)", palot)
+                    
+                    kärkilyönnit = len(df[df['tapahtuma_teksti'].str.contains('Kärkilyönti', case=False, na=False)])
+                    col3.metric("Kärkilyönnit (Päästetyt)", kärkilyönnit)
 
-        # Näytetään raaka-data tarkistusta varten
-        with st.expander("Katso ottelun kaikki tapahtumat"):
-            st.dataframe(df)
+                # Näytetään raaka-data
+                with st.expander("Katso kaikki ottelutapahtumat"):
+                    st.dataframe(df, use_container_width=True)
+                
+                # CSV Lataus vedonlyöntiyhtiölle
+                csv = df.to_csv(index=False).encode('utf-8')
+                st.download_button("📥 Lataa Plug & Play CSV", csv, f"pesis_peli_{ottelu_id}.csv", "text/csv")
+                
+            else:
+                st.warning("Ottelusta löytyi perustiedot, mutta ei vielä pelitapahtumia (onko peli alkanut?)")
+        else:
+            st.error(f"Palvelin vastasi virheellä: {r.status_code}. Rajapinta saattaa olla tilapäisesti poissa käytöstä.")
 
     except Exception as e:
-        st.error(f"Datan haku epäonnistui. Tarkista ID. Virhe: {e}")
+        st.error(f"Virhe: {e}")
+        st.info("Kokeile tarkistaa, että ID on pelkkä numero ilman välilyöntejä.")
